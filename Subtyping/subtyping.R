@@ -134,7 +134,7 @@ process_lineage <- function(obj, lineage, remove_receptors = FALSE) {
            width = 7, height = 6, units = "in")
   }
 
-  # saveRDS(sub.int, file = file.path(out_dir, sprintf("subset_%s_SCTintegrated.rds", lineage)))
+  saveRDS(sub.int, file = file.path(out_dir, sprintf("subset_%s_SCTintegrated.rds", lineage)))
   
   msg("done → %s", normalizePath(out_dir))
   invisible(sub.int)
@@ -151,3 +151,64 @@ for (lin in lineages) {
 }
 
 message("All done. Outputs in: ", normalizePath(out_root))
+
+
+## Umap 상에서 원래 annotation 확인
+## ===== Check original annotations on lineage UMAPs =====
+suppressPackageStartupMessages({library(Seurat); library(ggplot2); library(patchwork)})
+
+lineages <- c("T","NK","Mono")
+for (lin in lineages) {
+  rds_path <- file.path("/data/project/diabetes_LYH/tanya/rds", sprintf("subset_%s_SCTintegrated.rds", lin))
+  stopifnot(file.exists(rds_path))
+  sub.int <- readRDS(rds_path)
+
+  um <- Embeddings(sub.int, "umap"); xr <- range(um[,1], finite=TRUE); yr <- range(um[,2], finite=TRUE)
+  fix_axes <- function(p) p + coord_fixed(xlim=xr, ylim=yr) + theme(aspect.ratio=1)
+
+  # (선택) 클러스터 아이덴티티를 0.4로 맞춰두기
+  idcol <- sprintf("integrated_snn_res.%.1f", 0.4)
+  if (idcol %in% colnames(sub.int@meta.data)) {
+    Idents(sub.int) <- sub.int[[idcol]][,1]
+  }
+
+  stopifnot("celltype" %in% colnames(sub.int@meta.data))
+  out_dir <- file.path("Subtyping", lin, "AnnoCheck")
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+  ## (1) 기본: celltype 라벨 UMAP
+  p_main <- DimPlot(sub.int, reduction = "umap", group.by = "celltype", pt.size = 0.2) +
+            ggtitle(sprintf("%s — celltype (labeled)", lin))
+  p_main <- LabelClusters(p_main, id = "celltype", repel = TRUE)
+  p_main <- fix_axes(p_main)
+
+  ## (2) group별 facet + 라벨
+  p_group <- NULL
+  if ("group" %in% colnames(sub.int@meta.data)) {
+    plist <- DimPlot(sub.int, reduction = "umap", group.by = "celltype",
+                     split.by = "group", pt.size = 0.2, combine = FALSE)
+    plist <- lapply(plist, function(p) fix_axes(LabelClusters(p, id = "celltype", repel = TRUE)))
+    ncol_fac <- min(3, length(plist))
+    p_group <- wrap_plots(plist, ncol = ncol_fac) +
+               plot_annotation(title = sprintf("%s — celltype faceted by group", lin))
+  }
+
+  ## (3) orig.ident별 facet + 라벨
+  p_orig <- NULL
+  if ("orig.ident" %in% colnames(sub.int@meta.data)) {
+    plist2 <- DimPlot(sub.int, reduction = "umap", group.by = "celltype",
+                      split.by = "orig.ident", pt.size = 0.2, combine = FALSE)
+    plist2 <- lapply(plist2, function(p) fix_axes(LabelClusters(p, id = "celltype", repel = TRUE)))
+    ncol_fac2 <- min(3, length(plist2))
+    p_orig <- wrap_plots(plist2, ncol = ncol_fac2) +
+              plot_annotation(title = sprintf("%s — celltype faceted by orig.ident", lin))
+  }
+
+  ## (4) 한 PDF에 순서대로 저장 (페이지 1: 기본, 2: group, 3: orig.ident)
+  pdf_path <- file.path(out_dir, sprintf("UMAP_%s_celltype_ALL.pdf", lin))
+  pdf(pdf_path, width = 10, height = 8)
+  for (pg in list(p_main, p_group, p_orig)) if (!is.null(pg)) print(pg)
+  dev.off()
+}
+
+
